@@ -1,4 +1,6 @@
-﻿using System.Runtime.InteropServices;
+﻿using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -74,6 +76,12 @@ class Program
     
     [DllImport("user32.dll")]
     static extern short GetAsyncKeyState(int vKey);
+
+    [DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
     
     [DllImport("ntdll.dll")]
     private static extern uint NtDelayExecution([In] bool Alertable, [In] ref LARGE_INTEGER DelayInterval);
@@ -92,10 +100,50 @@ class Program
     const int MOUSEEVENTF_ABSOLUTE = 0x8000;
     const int SM_CXSCREEN = 0;
     const int SM_CYSCREEN = 1;
+
+    static Process? foregroundProcess;
+    static uint foregroundProcessId;
+
+    static bool IsCs2Foreground()
+    {
+        var window = GetForegroundWindow();
+        GetWindowThreadProcessId(window, out var processId);
+
+        try
+        {
+            if (processId != foregroundProcessId || foregroundProcess == null)
+            {
+                foregroundProcess?.Dispose();
+                foregroundProcess = null;
+                foregroundProcessId = 0;
+
+                if (window == IntPtr.Zero || processId == 0)
+                {
+                    return false;
+                }
+
+                foregroundProcess = Process.GetProcessById(checked((int)processId));
+                foregroundProcessId = processId;
+            }
+
+            return !foregroundProcess.HasExited &&
+                string.Equals(foregroundProcess.ProcessName, "cs2", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or Win32Exception or OverflowException)
+        {
+            foregroundProcess?.Dispose();
+            foregroundProcess = null;
+            foregroundProcessId = 0;
+            return false;
+        }
+    }
     
     static void MoveMouse(int deltaX, int deltaY)
     {
-        mouse_event(MOUSEEVENTF_MOVE, deltaX, deltaY, 0, (int)IntPtr.Zero);
+        if (IsCs2Foreground())
+        {
+            mouse_event(MOUSEEVENTF_MOVE, deltaX, deltaY, 0, (int)IntPtr.Zero);
+        }
     }
     
     static void DelayExecutionBy(long hns)
@@ -118,6 +166,12 @@ class Program
         {
             QueryPerformanceCounter(out lastTime);
             QueryPerformanceFrequency(out frequency);
+        }
+
+        public void Reset()
+        {
+            QueryPerformanceCounter(out lastTime);
+            remainingMovement = 0;
         }
 
         public int CalculateMovement(double yawspeed, double sensitivity, double m_yaw)
@@ -220,6 +274,7 @@ class Program
         Console.WriteLine();
         Console.WriteLine("Current yaw speed: " + config.Yaw[0]);
         Console.WriteLine("PAUSED, press " + config.Pause + " to unpause");
+        Console.WriteLine("Movement and gameplay hotkeys only work while CS2 is focused. Exit works globally.");
         
         int currentYawIndex = 0;
         bool paused = true;
@@ -227,6 +282,19 @@ class Program
 
         while (true)
         {
+            if (IsKeyDown((int) config.Exit))
+            {
+                Console.WriteLine("Exiting program...");
+                break;
+            }
+
+            if (!IsCs2Foreground())
+            {
+                calculator.Reset();
+                DelayExecutionBy(3500);
+                continue;
+            }
+
             var movement = calculator.CalculateMovement(config.Yaw[currentYawIndex],  config.Sensitivity, config.M_Yaw);
             
             // Check if the left mouse button is pressed and not paused
@@ -244,7 +312,7 @@ class Program
             }
 
             // Check if the 'P' key is pressed to toggle pause state for left mouse button
-            if (IsKeyDown((int) config.Pause))
+            if (IsCs2Foreground() && IsKeyDown((int) config.Pause))
             {
                 paused = !paused;
                 if (paused)
@@ -259,7 +327,7 @@ class Program
             }
 
             // Check if the '+' key is pressed to increase yaw speed
-            if (IsKeyDown((int) config.Inc) && !paused)
+            if (IsCs2Foreground() && IsKeyDown((int) config.Inc) && !paused)
             {
                 config.Yaw[currentYawIndex] += 10; // Increase yaw speed by 10
                 Thread.Sleep(200); // Delay to avoid multiple increments with one key press
@@ -267,27 +335,20 @@ class Program
             }
 
             // Check if the '-' key is pressed to decrease yaw speed
-            if (IsKeyDown((int) config.Dec) && !paused)
+            if (IsCs2Foreground() && IsKeyDown((int) config.Dec) && !paused)
             {
                 config.Yaw[currentYawIndex] -= 10; // Decrease yaw speed by 10
                 Thread.Sleep(200); // Delay to avoid multiple decrements with one key press
                 Console.WriteLine($"Yaw speed decreased to {config.Yaw[currentYawIndex]}");
             }
             
-            if (IsKeyDown((int) config.Toggle) && !paused)
+            if (IsCs2Foreground() && IsKeyDown((int) config.Toggle) && !paused)
             {
                 currentYawIndex = (currentYawIndex + 1) % config.Yaw.Count;
                 Console.WriteLine($"Yaw speed toggled to {config.Yaw[currentYawIndex]}");
                 Thread.Sleep(200); // Delay to avoid multiple toggles with one key press
             }
 
-            // Check if the END key is pressed to exit the program
-            if (IsKeyDown((int) config.Exit))
-            {
-                Console.WriteLine("Exiting program...");
-                break; // Exit the loop
-            }
-            
             DelayExecutionBy(3500);
         }
     }

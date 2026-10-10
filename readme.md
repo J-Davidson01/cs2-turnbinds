@@ -44,6 +44,24 @@ The program reads its configuration from a `config.json` file, which it will cre
 2. Restart the program for your changes to `config.json` to take effect.
 3. Use the configured keys to control the program during your game. You can toggle yaw speeds, pause the program, adjust yaw speeds on-the-fly, and more.
 
+### CS2 Focus Only
+
+Mouse movement and the pause, yaw toggle, increase, and decrease hotkeys only work while the foreground window belongs to `cs2.exe`. Alt-tabbing to another application automatically suppresses these inputs; returning to CS2 resumes normal operation without changing your manual pause setting. If the foreground process cannot be identified, no mouse movement is sent. The exit hotkey remains available globally.
+
+Existing `config.json` files work unchanged. The program still starts manually paused, so press your pause key while CS2 is focused to enable turning.
+
+To check the behavior:
+
+1. Focus CS2, unpause, and hold a configured turn key to verify turning works.
+2. Alt-tab to another application while holding the turn key and verify simulated mouse movement stops.
+3. Use the pause and yaw hotkeys outside CS2 and verify the program's settings do not change.
+4. Return to CS2 and verify turning resumes without a catch-up jump.
+5. Manually pause in CS2, alt-tab away and back, and verify it stays paused. Check the exit hotkey also works outside CS2.
+
+### Build
+
+Install the .NET 8 SDK or newer and run `./build.ps1` from the repository directory. The self-contained Windows x64 executable is published to `bin/Release/net8.0/win-x64/publish/cs2-turnbinds.exe`. Attach that executable to a GitHub release to distribute it; users do not need to install .NET.
+
 ## Key Bindings
 
 When configuring keys in `config.json`, use the key names from the [Virtual-Key Codes](https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes) documentation without the `VK_` prefix. For example, use `LBUTTON` for the left mouse button, `RBUTTON` for the right mouse button, `A` for the "A" key, etc.

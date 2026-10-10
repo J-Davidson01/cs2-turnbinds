@@ -34,6 +34,7 @@ The program reads its configuration from a `config.json` file, which it will cre
 - `Inc`: The key used to increase the current yaw speed.
 - `Dec`: The key used to decrease the current yaw speed.
 - `Exit`: The key used to exit the program.
+- `PauseWhenCursorVisible`: Suppress movement and yaw hotkeys when the Windows cursor is visible (default: `true`). The JSON key is `pause_when_cursor_visible`; existing configs without it also default to enabled.
 
 ![image](https://github.com/ws-cs2/cs2-turnbinds/assets/149922947/8550fec1-3727-47d8-bcd6-860a4841e455)
 
@@ -64,7 +65,13 @@ The movement loop uses a high-resolution Windows timer targeting 1,000 updates p
 
 Gameplay hotkeys have independent, non-blocking 200 ms cooldowns. Holding a hotkey repeats its action without stopping the movement loop. To test, hold a turn key while increasing, decreasing, or toggling yaw speed and check that turning stays continuous.
 
-Steam's in-game overlay still belongs to CS2's foreground process, so opening overlay chat does not automatically suppress turning. Use the pause hotkey before opening it.
+### Cursor Visibility Guard
+
+By default, movement and yaw hotkeys are suppressed whenever Windows reports a visible cursor, or when querying cursor visibility fails. This can prevent turning in Steam overlay chat and CS2 menus. Turning resumes when the cursor becomes hidden, without changing the manual pause setting or accumulating catch-up movement. Manual pause remains usable while CS2 is focused, and exit still works globally.
+
+This is a cursor visibility heuristic, not exact Steam overlay detection. If Steam or CS2 draws its own cursor without exposing it to Windows, the guard may not detect it. Test by unpausing in gameplay, opening overlay chat and clicking with a turn button, then closing the overlay and checking that turning resumes smoothly. Also test CS2 menus and manual pause.
+
+If it interferes with gameplay, add `"pause_when_cursor_visible": false` to your existing `config.json` object and restart. Otherwise, existing configs need no changes. If overlay detection does not work on your setup, use manual pause before opening it.
 
 ### Build
 

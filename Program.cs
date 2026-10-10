@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using cs2_turnbinds;
+using Microsoft.Win32.SafeHandles;
 
 public class Config
 {
@@ -64,13 +65,6 @@ public class KeysConverter : JsonConverter<Keys>
 
 class Program
 {
-    [StructLayout(LayoutKind.Explicit)]
-    struct LARGE_INTEGER
-    {
-        [FieldOffset(0)] public long QuadPart;
-    }
-    
-    
     [DllImport("user32.dll")]
     static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);
     
@@ -83,8 +77,14 @@ class Program
     [DllImport("user32.dll")]
     static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
     
-    [DllImport("ntdll.dll")]
-    private static extern uint NtDelayExecution([In] bool Alertable, [In] ref LARGE_INTEGER DelayInterval);
+    [DllImport("kernel32.dll", EntryPoint = "CreateWaitableTimerExW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeWaitHandle CreateWaitableTimerEx(IntPtr timerAttributes, string? timerName, uint flags, uint desiredAccess);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetWaitableTimer(SafeWaitHandle timer, ref long dueTime, int period, IntPtr completionRoutine, IntPtr argument, bool resume);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(SafeWaitHandle handle, uint milliseconds);
     
     [DllImport("kernel32.dll")]
     private static extern bool QueryPerformanceCounter(out long lpPerformanceCount);
@@ -140,20 +140,76 @@ class Program
     
     static void MoveMouse(int deltaX, int deltaY)
     {
-        if (IsCs2Foreground())
+        if ((deltaX != 0 || deltaY != 0) && IsCs2Foreground())
         {
             mouse_event(MOUSEEVENTF_MOVE, deltaX, deltaY, 0, (int)IntPtr.Zero);
         }
     }
-    
-    static void DelayExecutionBy(long hns)
-    {
-        // Convert the delay from 100-nanosecond intervals to a LARGE_INTEGER
-        LARGE_INTEGER interval;
-        interval.QuadPart = -1 * hns; // Negative value for relative delay
 
-        // Call NtDelayExecution
-        NtDelayExecution(false, ref interval);
+    sealed class MovementTimer : IDisposable
+    {
+        private const uint CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 0x00000002;
+        private const uint TIMER_MODIFY_STATE = 0x00000002;
+        private const uint SYNCHRONIZE = 0x00100000;
+        private readonly SafeWaitHandle timer;
+        private readonly long interval = Math.Max(1, Stopwatch.Frequency / 1000);
+        private long nextTick;
+
+        public MovementTimer()
+        {
+            timer = CreateWaitableTimerEx(IntPtr.Zero, null, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE);
+            if (timer.IsInvalid)
+            {
+                var error = Marshal.GetLastWin32Error();
+                timer.Dispose();
+                throw new Win32Exception(error, "Unable to create a high-resolution movement timer. Windows 10 version 1803 or newer is required.");
+            }
+
+            nextTick = Stopwatch.GetTimestamp() + interval;
+        }
+
+        public void WaitNextTick()
+        {
+            var now = Stopwatch.GetTimestamp();
+            var remaining = nextTick - now;
+            if (remaining > 0)
+            {
+                long dueTime = -Math.Max(1, remaining * 10_000_000 / Stopwatch.Frequency);
+                if (!SetWaitableTimer(timer, ref dueTime, 0, IntPtr.Zero, IntPtr.Zero, false) ||
+                    WaitForSingleObject(timer, uint.MaxValue) != 0)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Unable to wait for the movement timer.");
+                }
+            }
+
+            now = Stopwatch.GetTimestamp();
+            nextTick += interval;
+            if (nextTick <= now)
+            {
+                nextTick = now + interval;
+            }
+        }
+
+        public void Dispose()
+        {
+            timer.Dispose();
+        }
+    }
+
+    sealed class HotkeyCooldown
+    {
+        private long nextActivation;
+
+        public bool TryActivate(long timestamp)
+        {
+            if (timestamp < nextActivation)
+            {
+                return false;
+            }
+
+            nextActivation = timestamp + Stopwatch.Frequency / 5;
+            return true;
+        }
     }
     
     public class MouseMoveCalculator
@@ -279,9 +335,16 @@ class Program
         int currentYawIndex = 0;
         bool paused = true;
         var calculator = new MouseMoveCalculator();
+        using var movementTimer = new MovementTimer();
+        var pauseCooldown = new HotkeyCooldown();
+        var increaseCooldown = new HotkeyCooldown();
+        var decreaseCooldown = new HotkeyCooldown();
+        var toggleCooldown = new HotkeyCooldown();
 
         while (true)
         {
+            movementTimer.WaitNextTick();
+
             if (IsKeyDown((int) config.Exit))
             {
                 Console.WriteLine("Exiting program...");
@@ -291,7 +354,6 @@ class Program
             if (!IsCs2Foreground())
             {
                 calculator.Reset();
-                DelayExecutionBy(3500);
                 continue;
             }
 
@@ -311,8 +373,10 @@ class Program
                 MoveMouse(movement, 0);
             }
 
+            var timestamp = Stopwatch.GetTimestamp();
+
             // Check if the 'P' key is pressed to toggle pause state for left mouse button
-            if (IsCs2Foreground() && IsKeyDown((int) config.Pause))
+            if (IsCs2Foreground() && IsKeyDown((int) config.Pause) && pauseCooldown.TryActivate(timestamp))
             {
                 paused = !paused;
                 if (paused)
@@ -323,33 +387,27 @@ class Program
                 {
                     Console.WriteLine("ACTIVE press " + config.Pause + " to pause");
                 }
-                Thread.Sleep(200); // Delay to avoid multiple toggles with one key press
             }
 
             // Check if the '+' key is pressed to increase yaw speed
-            if (IsCs2Foreground() && IsKeyDown((int) config.Inc) && !paused)
+            if (IsCs2Foreground() && IsKeyDown((int) config.Inc) && !paused && increaseCooldown.TryActivate(timestamp))
             {
                 config.Yaw[currentYawIndex] += 10; // Increase yaw speed by 10
-                Thread.Sleep(200); // Delay to avoid multiple increments with one key press
                 Console.WriteLine($"Yaw speed increased to {config.Yaw[currentYawIndex]}");
             }
 
             // Check if the '-' key is pressed to decrease yaw speed
-            if (IsCs2Foreground() && IsKeyDown((int) config.Dec) && !paused)
+            if (IsCs2Foreground() && IsKeyDown((int) config.Dec) && !paused && decreaseCooldown.TryActivate(timestamp))
             {
                 config.Yaw[currentYawIndex] -= 10; // Decrease yaw speed by 10
-                Thread.Sleep(200); // Delay to avoid multiple decrements with one key press
                 Console.WriteLine($"Yaw speed decreased to {config.Yaw[currentYawIndex]}");
             }
             
-            if (IsCs2Foreground() && IsKeyDown((int) config.Toggle) && !paused)
+            if (IsCs2Foreground() && IsKeyDown((int) config.Toggle) && !paused && toggleCooldown.TryActivate(timestamp))
             {
                 currentYawIndex = (currentYawIndex + 1) % config.Yaw.Count;
                 Console.WriteLine($"Yaw speed toggled to {config.Yaw[currentYawIndex]}");
-                Thread.Sleep(200); // Delay to avoid multiple toggles with one key press
             }
-
-            DelayExecutionBy(3500);
         }
     }
 }

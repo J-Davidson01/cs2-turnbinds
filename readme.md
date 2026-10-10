@@ -58,6 +58,14 @@ To check the behavior:
 4. Return to CS2 and verify turning resumes without a catch-up jump.
 5. Manually pause in CS2, alt-tab away and back, and verify it stays paused. Check the exit hotkey also works outside CS2.
 
+### Smooth Movement
+
+The movement loop uses a high-resolution Windows timer targeting 1,000 updates per second, with fractional mouse movement carried between updates to preserve yaw speed. Actual timing depends on system load and Windows scheduling. Windows 10 version 1803 or newer (including Windows 11) is required.
+
+Gameplay hotkeys have independent, non-blocking 200 ms cooldowns. Holding a hotkey repeats its action without stopping the movement loop. To test, hold a turn key while increasing, decreasing, or toggling yaw speed and check that turning stays continuous.
+
+Steam's in-game overlay still belongs to CS2's foreground process, so opening overlay chat does not automatically suppress turning. Use the pause hotkey before opening it.
+
 ### Build
 
 Install the .NET 8 SDK or newer and run `./build.ps1` from the repository directory. The self-contained Windows x64 executable is published to `bin/Release/net8.0/win-x64/publish/cs2-turnbinds.exe`. Attach that executable to a GitHub release to distribute it; users do not need to install .NET.
